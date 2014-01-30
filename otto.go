@@ -107,7 +107,7 @@ package otto
 
 import (
 	"fmt"
-	"github.com/robertkrimen/otto/registry"
+	"./registry"
 	"strings"
 )
 
