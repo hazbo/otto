@@ -1,6 +1,8 @@
 /*
 Package otto is a JavaScript parser and interpreter written natively in Go.
 
+http://godoc.org/github.com/robertkrimen/otto
+
 	// Create a new runtime
 	Otto := otto.New()
 
@@ -96,11 +98,73 @@ Go translates JavaScript-style regular expressions into something that is "regex
 Unfortunately, JavaScript has positive lookahead, negative lookahead, and backreferencing,
 all of which are not supported by Go's RE2-like engine: https://code.google.com/p/re2/wiki/Syntax
 
-A brief discussion of these limitations: "Regexp (?!re)" https://groups.google.com/forum/?fromgroups=#!topic/golang-nuts/7qgSDWPIh_E
+A brief discussion of these limitations: "Regexp (?!re)" https://groups.google.com/forum/?fromgroups=#%21topic/golang-nuts/7qgSDWPIh_E
 
 More information about RE2: https://code.google.com/p/re2/
 
 JavaScript considers a vertical tab (\000B <VT>) to be part of the whitespace class (\s), while RE2 does not.
+
+Halting Problem
+
+If you want to stop long running executions (like third-party code), you can use the interrupt channel to do this:
+
+    package main
+
+    import (
+        "errors"
+        "fmt"
+        Otto "github.com/robertkrimen/otto"
+        "os"
+        Time "time"
+    )
+
+    var Halt = errors.New("Halt")
+
+    func main() {
+        runUnsafe(`var abc = [];`)
+        runUnsafe(`
+        while (true) {
+            // Loop forever
+        }`)
+    }
+
+    func runUnsafe(unsafe string) {
+        start := Time.Now()
+        defer func() {
+            duration := Time.Since(start)
+            if caught := recover(); caught != nil {
+                if caught == Halt {
+                    fmt.Fprintf(os.Stderr, "Some code took to long! Stopping after: %v\n", duration)
+                    return
+                }
+                panic(caught) // Something else happened, repanic!
+            }
+            fmt.Fprintf(os.Stderr, "Ran code successfully: %v\n", duration)
+        }()
+        otto := Otto.New()
+        otto.Interrupt = make(chan func())
+        go func() {
+            Time.Sleep(2 * Time.Second) // Stop after two seconds
+            otto.Interrupt <- func() {
+                panic(Halt)
+            }
+        }()
+        otto.Run(unsafe) // Here be dragons (risky code)
+        otto.Interrupt = nil
+    }
+
+Where is setTimeout/setInterval?
+
+These timing functions are not actually part of the ECMA-262 specification. Typically, they belong to the `windows` object (in the browser).
+It would not be difficult to provide something like these via Go, but you probably want to wrap otto in an event loop in that case.
+
+Here is some discussion of the problem:
+
+* http://book.mixu.net/node/ch2.html
+
+* http://en.wikipedia.org/wiki/Reentrancy_%28computing%29
+
+* http://aaroncrane.co.uk/2009/02/perl_safe_signals/
 
 */
 package otto
@@ -113,7 +177,10 @@ import (
 
 // Otto is the representation of the JavaScript runtime. Each instance of Otto has a self-contained namespace.
 type Otto struct {
-	runtime *_runtime
+	// Interrupt is a channel for interrupting the runtime. You can use this to halt a long running execution, for example.
+	// See "Halting Problem" for more information.
+	Interrupt chan func()
+	runtime   *_runtime
 }
 
 // New will allocate a new JavaScript runtime
